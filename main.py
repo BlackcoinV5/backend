@@ -1,6 +1,6 @@
 import os
 import asyncio
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
@@ -40,15 +40,12 @@ async def balance(update: Update, context: CallbackContext):
 async def send_points(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     args = context.args
-
     if len(args) < 2:
         await update.message.reply_text("Usage: /send_points <ID> <montant>")
         return
-
     try:
         recipient_id = int(args[0])
         amount = int(args[1])
-
         if user_id in users and users[user_id]["points"] >= amount:
             users[user_id]["points"] -= amount
             users.setdefault(recipient_id, {"points": 0, "wallet": 0})["points"] += amount
@@ -64,15 +61,18 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("balance", balance))
 application.add_handler(CommandHandler("send_points", send_points))
 
-# ✅ Lancer le bot dans un thread d'arrière-plan avec asyncio
+# ✅ Fonction pour lancer le bot de manière asynchrone
 async def start_bot():
-    """Démarre le bot Telegram sans bloquer FastAPI"""
-    await application.run_polling()
+    """Démarre le bot Telegram"""
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
 
+# ✅ Lancer le bot en parallèle au démarrage de FastAPI
 @app.on_event("startup")
 async def startup_event():
-    """Lancer le bot au démarrage de FastAPI"""
-    asyncio.create_task(start_bot())
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_bot())
 
 # ✅ Webhook pour recevoir les mises à jour Telegram
 @app.post("/webhook")
