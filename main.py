@@ -32,7 +32,6 @@ app.add_middleware(
 )
 
 # ✅ Initialiser le bot Telegram
-bot = Bot(token=TOKEN)
 application = Application.builder().token(TOKEN).build()
 
 # ✅ Stockage temporaire des joueurs
@@ -97,12 +96,11 @@ application.add_error_handler(error_handler)
 async def start_bot():
     WEBHOOK_URL = "https://blackcoin-backend-uv43.onrender.com/webhook"
     
-    # Supprimer l'ancien webhook pour éviter les erreurs de conflit
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    
-    await application.initialize()
-    await application.bot.set_webhook(WEBHOOK_URL) # ✅ Activer le Webhook
+    await application.initialize() # ✅ Initialisation du bot avant de l'utiliser
+    await application.bot.delete_webhook(drop_pending_updates=True) # ✅ Supprime l'ancien webhook
+    await application.bot.set_webhook(WEBHOOK_URL) # ✅ Active le webhook
     await application.start()
+    
     logger.info(f"✅ Webhook activé sur {WEBHOOK_URL}")
 
 # ✅ Lancer le bot en parallèle de FastAPI
@@ -117,7 +115,7 @@ async def webhook(request: Request):
     """Gère les mises à jour de Telegram via Webhook"""
     try:
         data = await request.json()
-        update = Update.de_json(data, bot)
+        update = Update.de_json(data, application.bot) # ✅ Correction ici
         await application.process_update(update)
         return {"status": "ok"}
     except Exception as e:
