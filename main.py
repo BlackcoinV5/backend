@@ -1,10 +1,15 @@
 import os
 import asyncio
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from fastapi.middleware.cors import CORSMiddleware
+
+# ✅ Configuration des logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ✅ Charger les variables d'environnement
 load_dotenv()
@@ -12,7 +17,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://blackcoin-v5-frontend-j1w3xnv4f-blackcoins-projects.vercel.app")
 
 if not TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN n'est pas défini dans .env")
+    raise ValueError("⚠️ TELEGRAM_BOT_TOKEN n'est pas défini dans .env")
 
 # ✅ Initialiser FastAPI
 app = FastAPI()
@@ -20,7 +25,7 @@ app = FastAPI()
 # ✅ Activer CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ⚠️ En production, restreindre aux domaines de confiance
+    allow_origins=["*"], # ⚠️ En production, restreindre aux domaines de confiance
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -77,17 +82,28 @@ async def send_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("⚠ Erreur : Veuillez entrer un ID valide et un montant en nombre.")
 
+# ✅ Gestionnaire d'erreurs global
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Une erreur est survenue : {context.error}")
+    await update.message.reply_text("⚠ Une erreur est survenue. Merci de réessayer plus tard.")
+
 # ✅ Ajouter les handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("balance", balance))
 application.add_handler(CommandHandler("send_points", send_points))
+application.add_error_handler(error_handler)
 
 # ✅ Fonction pour démarrer le bot en mode Webhook
 async def start_bot():
     WEBHOOK_URL = "https://blackcoin-backend-uv43.onrender.com/webhook"
+    
+    # Supprimer l'ancien webhook pour éviter les erreurs de conflit
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    
     await application.initialize()
-    await application.bot.set_webhook(WEBHOOK_URL)  # ✅ Activer le Webhook
+    await application.bot.set_webhook(WEBHOOK_URL) # ✅ Activer le Webhook
     await application.start()
+    logger.info(f"✅ Webhook activé sur {WEBHOOK_URL}")
 
 # ✅ Lancer le bot en parallèle de FastAPI
 @app.on_event("startup")
@@ -105,6 +121,7 @@ async def webhook(request: Request):
         await application.process_update(update)
         return {"status": "ok"}
     except Exception as e:
+        logger.error(f"Erreur Webhook: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 # ✅ API pour récupérer les données des utilisateurs
