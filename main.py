@@ -4,19 +4,29 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from fastapi.middleware.cors import CORSMiddleware
 
-# Charger les variables d'environnement
+# ✅ Charger les variables d'environnement
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Initialiser FastAPI
+# ✅ Initialiser FastAPI
 app = FastAPI()
 
-# Initialiser le bot Telegram
+# ✅ Activer CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permet toutes les origines (à restreindre en prod)
+    allow_credentials=True,
+    allow_methods=["*"],  # Autorise GET, POST, etc.
+    allow_headers=["*"],  # Autorise tous les headers
+)
+
+# ✅ Initialiser le bot Telegram
 bot = Bot(token=TOKEN)
 application = Application.builder().token(TOKEN).build()
 
-# Stockage temporaire des joueurs
+# ✅ Stockage temporaire des joueurs
 users = {}
 
 # ✅ Commande /start
@@ -56,19 +66,19 @@ async def send_points(update: Update, context: CallbackContext):
     except ValueError:
         await update.message.reply_text("⚠ Erreur : Veuillez entrer un ID valide et un montant en nombre.")
 
-# Ajouter les handlers
+# ✅ Ajouter les handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("balance", balance))
 application.add_handler(CommandHandler("send_points", send_points))
 
-# ✅ Fonction pour lancer le bot de manière asynchrone
+# ✅ Fonction pour lancer le bot Telegram
 async def start_bot():
     """Démarre le bot Telegram"""
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
 
-# ✅ Lancer le bot en parallèle au démarrage de FastAPI
+# ✅ Lancer le bot en parallèle de FastAPI
 @app.on_event("startup")
 async def startup_event():
     loop = asyncio.get_event_loop()
@@ -83,8 +93,13 @@ async def webhook(request: Request):
     await application.process_update(update)
     return {"status": "ok"}
 
+# ✅ API pour récupérer les données des utilisateurs
+@app.get("/user-data")
+async def get_user_data():
+    """Renvoie les données de tous les utilisateurs"""
+    return users
+
 # ✅ Page d'accueil
 @app.get("/")
 async def home():
     return {"message": "Bot connecté à BlackCoin"}
-
