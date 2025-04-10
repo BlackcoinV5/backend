@@ -176,16 +176,6 @@ async def auth_telegram(user_data: dict, db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(user)
 
-    return {
-        "id": user.id,
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        "username": user.username,
-        "photo_url": user.photo_url,
-        "points": user.points,
-        "wallet": user.wallet,
-    }
-
 # Récupérer tous les utilisateurs
 @app.get("/user-data")
 async def get_user_data(db: AsyncSession = Depends(get_db)):
