@@ -4,6 +4,7 @@ import logging
 import hashlib
 import hmac
 import time
+
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 
 from database import init_db, SessionLocal
 import models
+import schemas
 
 # Configuration des logs
 logging.basicConfig(level=logging.INFO)
@@ -31,10 +33,10 @@ if not TOKEN:
 # Initialisation de FastAPI
 app = FastAPI()
 
-# CORS Middleware (à restreindre en production)
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # À restreindre plus tard
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,12 +45,12 @@ app.add_middleware(
 # Initialisation du bot Telegram
 application = Application.builder().token(TOKEN).build()
 
-# Dépendance DB (asynchrone)
+# Dépendance DB
 async def get_db():
     async with SessionLocal() as session:
         yield session
 
-# Vérification d'authentification Telegram
+# Vérifie l'authentification Telegram
 def verify_telegram_auth(data):
     check_hash = data.pop("hash", None)
     sorted_data = "\n".join([f"{k}={v}" for k, v in sorted(data.items())])
@@ -125,7 +127,7 @@ application.add_handler(CommandHandler("balance", balance))
 application.add_handler(CommandHandler("send_points", send_points))
 application.add_error_handler(error_handler)
 
-# Démarrage du bot
+# Lancer le bot en webhook
 async def start_bot():
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
@@ -133,15 +135,15 @@ async def start_bot():
     logger.info(f"✅ Webhook activé sur {WEBHOOK_URL}")
     await application.start()
 
-# Événement de démarrage de FastAPI
+# Événement au démarrage de FastAPI
 @app.on_event("startup")
-async def startup_event():
+async def on_startup():
     await init_db()
     asyncio.create_task(start_bot())
 
 # Webhook Telegram
 @app.post("/webhook")
-async def webhook(request: Request):
+async def handle_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, application.bot)
@@ -151,8 +153,8 @@ async def webhook(request: Request):
         logger.error(f"Erreur Webhook: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-# Authentification Telegram
-@app.post("/auth/telegram")
+# Authentification via Telegram
+@app.post("/auth/telegram", response_model=schemas.UserBase)
 async def auth_telegram(user_data: dict, db: AsyncSession = Depends(get_db)):
     if not verify_telegram_auth(user_data):
         raise HTTPException(status_code=403, detail="Données Telegram invalides")
@@ -176,26 +178,16 @@ async def auth_telegram(user_data: dict, db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(user)
 
-# Récupérer tous les utilisateurs
-@app.get("/user-data")
-async def get_user_data(db: AsyncSession = Depends(get_db)):
+    return user
+
+# Récupération des utilisateurs
+@app.get("/user-data", response_model=list[schemas.UserBase])
+async def get_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.User))
     users = result.scalars().all()
-
-    return [
-        {
-            "id": user.id,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "username": user.username,
-            "photo_url": user.photo_url,
-            "points": user.points,
-            "wallet": user.wallet,
-        }
-        for user in users
-    ]
+    return users
 
 # Page d'accueil
 @app.get("/")
-def home():
-    return {"message": "Bot connecté à BlackCoin"}
+def root():
+    return {"message": "✅ Backend BlackCoin opérationnel"}

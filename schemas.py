@@ -1,22 +1,41 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+
+# --- Schémas Utilisateur ---
 
 class UserBase(BaseModel):
-    telegram_id: int
-    name: str
-    email: Optional[EmailStr] = None
-    profile_picture: Optional[str] = None
-    balance: float = 0.0
-    level: int = 1
-    ranking: int = 0
-
-class UserCreate(UserBase):
-    pass
-
-class UserResponse(UserBase):
     id: int
-    created_at: datetime
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    username: Optional[str] = None
+    photo_url: Optional[str] = None
+    points: int
+    wallet: int
 
     class Config:
         orm_mode = True
+
+
+class UserCreate(BaseModel):
+    id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    username: Optional[str] = None
+    photo_url: Optional[str] = None
+
+
+# --- Schémas Transaction ---
+
+class TransactionBase(BaseModel):
+    user_id: int
+    amount: int
+    type: str
+
+    class Config:
+        orm_mode = True
+
+
+class TransactionCreate(BaseModel):
+    user_id: int
+    amount: int
+    type: str

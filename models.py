@@ -1,15 +1,19 @@
-from database import Base  # ✅ Correct
-from sqlalchemy import Column, Integer, String, Numeric, BigInteger, Text, TIMESTAMP, func
+from sqlalchemy import Column, Integer, String
+from database import Base
 
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False)
-    name = Column(String, nullable=False)
-    email = Column(String, unique=True, nullable=True)
-    profile_picture = Column(Text, nullable=True)
-    balance = Column(Numeric, default=0.00)
-    level = Column(Integer, default=1)
-    ranking = Column(Integer, default=0)
-    created_at = Column(TIMESTAMP, server_default=func.now())
+    first_name = Column(String)
+    last_name = Column(String)
+    username = Column(String, index=True)
+    photo_url = Column(String)
+    points = Column(Integer, default=0)
+    wallet = Column(Integer, default=0)
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    amount = Column(Integer)
+    type = Column(String)  # credit ou debit
