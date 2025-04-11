@@ -187,7 +187,7 @@ async def get_users(db: AsyncSession = Depends(get_db)):
     return users
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    auth_link = f"{FRONTEND_URL}"  # URL de ton app frontend, ex: https://blackcoin-v5-frontend.vercel.app/
+    auth_link = f"{https://blackcoin-v5-frontend.vercel.app}"  # URL de ton app frontend, ex: https://blackcoin-v5-frontend.vercel.app/
     keyboard = [
         [InlineKeyboardButton("🚀 Lancer l'app", web_app=WebAppInfo(url=auth_link))]
     ]
