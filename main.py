@@ -4,7 +4,7 @@ import logging
 import hashlib
 import hmac
 import time
-
+from telegram import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,6 @@ from sqlalchemy.future import select
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
-
 from database import init_db, SessionLocal
 import models
 import schemas
@@ -186,6 +185,18 @@ async def get_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.User))
     users = result.scalars().all()
     return users
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    auth_link = f"{FRONTEND_URL}"  # URL de ton app frontend, ex: https://blackcoin-v5-frontend.vercel.app/
+    keyboard = [
+        [InlineKeyboardButton("🚀 Lancer l'app", web_app=WebAppInfo(url=auth_link))]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Bienvenue sur BlackCoin 🎉 !\nClique sur le bouton ci-dessous pour ouvrir l'application :",
+        reply_markup=reply_markup
+    )
+
 
 # Page d'accueil
 @app.get("/")
