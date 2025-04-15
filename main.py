@@ -4,70 +4,76 @@ import logging
 import hashlib
 import hmac
 import time
-from telegram import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from telegram import Update
+
+from telegram import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from dotenv import load_dotenv
-from database import init_db, SessionLocal
+
 import models
 import schemas
+from database import init_db, SessionLocal
 
-# Configuration des logs
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Charger les variables d'environnement
+# === Chargement des variables d'environnement ===
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-if not TOKEN:
-    raise ValueError("⚠️ TELEGRAM_BOT_TOKEN n'est pas défini dans .env")
+if not TOKEN or not FRONTEND_URL or not WEBHOOK_URL:
+    raise ValueError("⚠️ .env mal configuré. Vérifie TELEGRAM_BOT_TOKEN, FRONTEND_URL et WEBHOOK_URL.")
 
-# Initialisation de FastAPI
+# === Configuration des logs ===
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# === Initialisation de FastAPI ===
 app = FastAPI()
 
-# CORS Middleware
+# === Configuration CORS ===
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # À restreindre plus tard
+    allow_origins=["*"],  # À restreindre plus tard pour la sécurité
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialisation du bot Telegram
+# === Initialisation du bot Telegram ===
 application = Application.builder().token(TOKEN).build()
 
-# Dépendance DB
+# === Dépendance base de données ===
 async def get_db():
     async with SessionLocal() as session:
         yield session
 
-# Vérifie l'authentification Telegram
+# === Vérification de l’authentification Telegram ===
 def verify_telegram_auth(data):
-    check_hash = data.pop("hash", None)
-    sorted_data = "\n".join([f"{k}={v}" for k, v in sorted(data.items())])
+    data_copy = data.copy()
+    check_hash = data_copy.pop("hash", None)
+    sorted_data = "\n".join([f"{k}={v}" for k, v in sorted(data_copy.items())])
     secret_key = hashlib.sha256(TOKEN.encode()).digest()
     expected_hash = hmac.new(secret_key, sorted_data.encode(), hashlib.sha256).hexdigest()
-    return check_hash == expected_hash and (int(data["auth_date"]) + 86400) > int(time.time())
 
-# Commande /start
+    auth_time_ok = (int(data_copy.get("auth_date", "0")) + 86400) > int(time.time())
+    return check_hash == expected_hash and auth_time_ok
+
+# === Commande /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    auth_link = f"{FRONTEND_URL}/auth/telegram?user_id={user_id}"
+    keyboard = [
+        [InlineKeyboardButton("🚀 Lancer l'app", web_app=WebAppInfo(url=FRONTEND_URL))]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"Bienvenue sur BlackCoin 🎉 !\n"
-        f"🔗 Connecte-toi ici : {auth_link}\n\n"
-        "Utilise /balance pour voir ton solde."
+        "Bienvenue sur BlackCoin 🎉 !\nClique sur le bouton ci-dessous pour ouvrir l'application :",
+        reply_markup=reply_markup
     )
 
-# Commande /balance
+# === Commande /balance ===
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with SessionLocal() as db:
         user_id = update.effective_user.id
@@ -81,7 +87,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ Utilisateur non trouvé.")
 
-# Commande /send_points
+# === Commande /send_points ===
 async def send_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with SessionLocal() as db:
         user_id = update.effective_user.id
@@ -115,18 +121,19 @@ async def send_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("⚠ Erreur : Veuillez entrer un ID valide et un montant en nombre.")
 
-# Gestion des erreurs du bot
+# === Gestion des erreurs du bot ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Erreur bot : {context.error}")
-    await update.message.reply_text("⚠ Une erreur est survenue. Merci de réessayer plus tard.")
+    if update.message:
+        await update.message.reply_text("⚠ Une erreur est survenue. Merci de réessayer plus tard.")
 
-# Ajout des handlers
+# === Ajout des handlers ===
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("balance", balance))
 application.add_handler(CommandHandler("send_points", send_points))
 application.add_error_handler(error_handler)
 
-# Lancer le bot en webhook
+# === Démarrage du bot avec webhook ===
 async def start_bot():
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
@@ -134,13 +141,13 @@ async def start_bot():
     logger.info(f"✅ Webhook activé sur {WEBHOOK_URL}")
     await application.start()
 
-# Événement au démarrage de FastAPI
+# === Démarrage FastAPI ===
 @app.on_event("startup")
 async def on_startup():
     await init_db()
     asyncio.create_task(start_bot())
 
-# Webhook Telegram
+# === Endpoint Webhook Telegram ===
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
@@ -152,9 +159,11 @@ async def handle_webhook(request: Request):
         logger.error(f"Erreur Webhook: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-# Authentification via Telegram
+# === Authentification Telegram (frontend) ===
 @app.post("/auth/telegram", response_model=schemas.UserBase)
 async def auth_telegram(user_data: dict, db: AsyncSession = Depends(get_db)):
+    print("🧪 Données reçues depuis le frontend :", user_data)
+
     if not verify_telegram_auth(user_data):
         raise HTTPException(status_code=403, detail="Données Telegram invalides")
 
@@ -179,26 +188,13 @@ async def auth_telegram(user_data: dict, db: AsyncSession = Depends(get_db)):
 
     return user
 
-# Récupération des utilisateurs
+# === Liste des utilisateurs ===
 @app.get("/user-data", response_model=list[schemas.UserBase])
 async def get_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.User))
-    users = result.scalars().all()
-    return users
+    return result.scalars().all()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    auth_link = f"{https://blackcoin-v5-frontend.vercel.app}"  # URL de ton app frontend, ex: https://blackcoin-v5-frontend.vercel.app/
-    keyboard = [
-        [InlineKeyboardButton("🚀 Lancer l'app", web_app=WebAppInfo(url=auth_link))]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Bienvenue sur BlackCoin 🎉 !\nClique sur le bouton ci-dessous pour ouvrir l'application :",
-        reply_markup=reply_markup
-    )
-
-
-# Page d'accueil
+# === Page d'accueil du backend ===
 @app.get("/")
 def root():
     return {"message": "✅ Backend BlackCoin opérationnel"}
