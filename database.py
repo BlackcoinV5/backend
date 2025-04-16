@@ -8,25 +8,24 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise ValueError("DATABASE_URL manquant dans le fichier .env")
+    raise ValueError("DATABASE_URL manquant dans .env")
 
-# Conversion pour asyncpg
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+# Configuration corrigée avec echo=False
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False,
+    echo=False,  # Logs désactivés
     pool_size=10,
-    max_overflow=5
+    max_overflow=5,
+    pool_pre_ping=True
 )
 
-# Création de la session async
 async_session = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False,
-    autoflush=False
+    expire_on_commit=False
 )
 
 Base = declarative_base()
