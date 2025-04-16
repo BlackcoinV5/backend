@@ -25,107 +25,97 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 if not TOKEN or not FRONTEND_URL or not WEBHOOK_URL:
-    raise ValueError("⚠️ .env mal configuré. Vérifie TELEGRAM_BOT_TOKEN, FRONTEND_URL et WEBHOOK_URL.")
+    raise ValueError("⚠️ Vérifie .env : TELEGRAM_BOT_TOKEN, FRONTEND_URL, WEBHOOK_URL manquants")
 
-# === Configuration des logs ===
+# === Logs ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Initialisation de FastAPI ===
+# === Initialisation de l'app FastAPI ===
 app = FastAPI()
 
-# === Configuration CORS ===
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # À restreindre plus tard pour la sécurité
+    allow_origins=["*"],  # Sécuriser plus tard avec l'URL du frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# === Initialisation du bot Telegram ===
-application = Application.builder().token(TOKEN).build()
-
-# === Dépendance base de données ===
+# === Dépendance DB ===
 async def get_db():
     async with SessionLocal() as session:
         yield session
 
-# === Vérification de l’authentification Telegram ===
-def verify_telegram_auth(data):
-    data_copy = data.copy()
-    check_hash = data_copy.pop("hash", None)
-    sorted_data = "\n".join([f"{k}={v}" for k, v in sorted(data_copy.items())])
+# === Authentification Telegram (vérification du hash) ===
+def verify_telegram_auth(data: dict) -> bool:
+    auth_date = int(data.get("auth_date", "0"))
+    if (auth_date + 86400) < int(time.time()):
+        return False
+
+    received_hash = data.get("hash")
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted((k, v) for k, v in data.items() if k != "hash"))
+
     secret_key = hashlib.sha256(TOKEN.encode()).digest()
-    expected_hash = hmac.new(secret_key, sorted_data.encode(), hashlib.sha256).hexdigest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
 
-    auth_time_ok = (int(data_copy.get("auth_date", "0")) + 86400) > int(time.time())
-    return check_hash == expected_hash and auth_time_ok
+    return hmac.compare_digest(received_hash, computed_hash)
 
-# === Commande /start ===
+# === Bot Telegram ===
+application = Application.builder().token(TOKEN).build()
+
+# === Commandes du bot ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🚀 Lancer l'app", web_app=WebAppInfo(url=FRONTEND_URL))]
-    ]
+    keyboard = [[InlineKeyboardButton("🚀 Ouvrir l'app", web_app=WebAppInfo(url=FRONTEND_URL))]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Bienvenue sur BlackCoin 🎉 !\nClique sur le bouton ci-dessous pour ouvrir l'application :",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("Bienvenue sur BlackCoin 🎉 !", reply_markup=reply_markup)
 
-# === Commande /balance ===
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with SessionLocal() as db:
         user_id = update.effective_user.id
         result = await db.execute(select(models.User).filter(models.User.id == user_id))
         user = result.scalar_one_or_none()
-
         if user:
-            await update.message.reply_text(
-                f"💰 Solde: {user.points} pts\n🔹 Wallet: {user.wallet} pts"
-            )
+            await update.message.reply_text(f"💰 Points: {user.points}\n🔐 Wallet: {user.wallet}")
         else:
-            await update.message.reply_text("⚠️ Utilisateur non trouvé.")
+            await update.message.reply_text("❌ Utilisateur introuvable.")
 
-# === Commande /send_points ===
 async def send_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) < 2:
+        return await update.message.reply_text("❗ Format: /send_points <ID> <montant>")
+
+    try:
+        recipient_id = int(args[0])
+        amount = int(args[1])
+    except ValueError:
+        return await update.message.reply_text("❌ Entrez un ID et un montant valides.")
+
     async with SessionLocal() as db:
-        user_id = update.effective_user.id
-        args = context.args
+        sender_result = await db.execute(select(models.User).filter(models.User.id == update.effective_user.id))
+        sender = sender_result.scalar_one_or_none()
 
-        if len(args) < 2:
-            await update.message.reply_text("Usage: /send_points <ID> <montant>")
-            return
+        recipient_result = await db.execute(select(models.User).filter(models.User.id == recipient_id))
+        recipient = recipient_result.scalar_one_or_none()
 
-        try:
-            recipient_id = int(args[0])
-            amount = int(args[1])
+        if not sender or not recipient or sender.points < amount:
+            return await update.message.reply_text("⚠️ Erreur : utilisateur ou solde invalide.")
 
-            sender_result = await db.execute(select(models.User).filter(models.User.id == user_id))
-            sender = sender_result.scalar_one_or_none()
+        sender.points -= amount
+        recipient.points += amount
 
-            recipient_result = await db.execute(select(models.User).filter(models.User.id == recipient_id))
-            recipient = recipient_result.scalar_one_or_none()
+        db.add(models.Transaction(user_id=sender.id, amount=amount, type="debit"))
+        db.add(models.Transaction(user_id=recipient.id, amount=amount, type="credit"))
+        await db.commit()
 
-            if sender and recipient and sender.points >= amount:
-                sender.points -= amount
-                recipient.points += amount
-
-                db.add(models.Transaction(user_id=user_id, amount=amount, type="debit"))
-                db.add(models.Transaction(user_id=recipient_id, amount=amount, type="credit"))
-                await db.commit()
-
-                await update.message.reply_text(f"✅ {amount} pts envoyés à {recipient_id} !")
-            else:
-                await update.message.reply_text("⚠ Solde insuffisant ou utilisateur inexistant.")
-        except ValueError:
-            await update.message.reply_text("⚠ Erreur : Veuillez entrer un ID valide et un montant en nombre.")
+        await update.message.reply_text(f"✅ {amount} points envoyés à {recipient.username or recipient_id}")
 
 # === Gestion des erreurs du bot ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Erreur bot : {context.error}")
+    logger.error(f"Bot Error: {context.error}")
     if update.message:
-        await update.message.reply_text("⚠ Une erreur est survenue. Merci de réessayer plus tard.")
+        await update.message.reply_text("⚠️ Erreur inattendue.")
 
 # === Ajout des handlers ===
 application.add_handler(CommandHandler("start", start))
@@ -133,15 +123,15 @@ application.add_handler(CommandHandler("balance", balance))
 application.add_handler(CommandHandler("send_points", send_points))
 application.add_error_handler(error_handler)
 
-# === Démarrage du bot avec webhook ===
+# === Lancement du bot avec webhook ===
 async def start_bot():
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
     await application.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"✅ Webhook activé sur {WEBHOOK_URL}")
+    logger.info(f"✅ Webhook Telegram prêt : {WEBHOOK_URL}")
     await application.start()
 
-# === Démarrage FastAPI ===
+# === FastAPI - Événement au démarrage ===
 @app.on_event("startup")
 async def on_startup():
     await init_db()
@@ -149,26 +139,21 @@ async def on_startup():
 
 # === Endpoint Webhook Telegram ===
 @app.post("/webhook")
-async def handle_webhook(request: Request):
-    try:
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Erreur Webhook: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return {"ok": True}
 
-# === Authentification Telegram (frontend) ===
+# === Authentification Telegram depuis le frontend ===
 @app.post("/auth/telegram", response_model=schemas.UserBase)
 async def auth_telegram(user_data: dict, db: AsyncSession = Depends(get_db)):
-    print("🧪 Données reçues depuis le frontend :", user_data)
+    print("📩 Données reçues :", user_data)
 
     if not verify_telegram_auth(user_data):
-        raise HTTPException(status_code=403, detail="Données Telegram invalides")
+        raise HTTPException(status_code=403, detail="Authentification Telegram invalide")
 
     user_id = user_data["id"]
-
     result = await db.execute(select(models.User).filter(models.User.id == user_id))
     user = result.scalar_one_or_none()
 
@@ -194,7 +179,7 @@ async def get_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.User))
     return result.scalars().all()
 
-# === Page d'accueil du backend ===
+# === Page d'accueil ===
 @app.get("/")
 def root():
     return {"message": "✅ Backend BlackCoin opérationnel"}
