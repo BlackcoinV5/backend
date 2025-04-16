@@ -21,7 +21,8 @@ from telegram.error import TelegramError
 
 import models
 import schemas
-from database import async_session
+# Nouvel import
+from database import get_db, async_session
 from utils import send_telegram_message
 
 # === Configuration initiale ===
@@ -134,7 +135,7 @@ def verify_telegram_auth(data: dict) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = update.effective_user
-        async with async_session() as db:
+        async with async_session() as session:
             # Vérifier si l'utilisateur existe déjà
             result = await db.execute(
                 select(models.User).where(models.User.id == user.id))
