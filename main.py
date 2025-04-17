@@ -18,6 +18,8 @@ from sqlalchemy import update as sql_update
 from telegram import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.error import TelegramError
+from telegram import Update
+from telegram.ext import ContextTypes
 
 import models
 import schemas
@@ -325,6 +327,9 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Une erreur interne est survenue"},
     )
+
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(update.message.text)
 
 # === Handlers Telegram ===
 application.add_handler(CommandHandler("start", start))
