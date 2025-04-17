@@ -328,6 +328,18 @@ async def general_exception_handler(request: Request, exc: Exception):
         content={"detail": "Une erreur interne est survenue"},
     )
 
+# === Initialisation de la base de données ===
+async def init_db():
+    async with async_session() as session:
+        try:
+            # Test simple pour vérifier la connexion
+            await session.execute(select(1))
+            logger.info("✅ Connexion à la base de données réussie.")
+        except Exception as e:
+            logger.error(f"❌ Erreur de connexion à la base de données: {e}")
+            raise
+
+
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(update.message.text)
 
