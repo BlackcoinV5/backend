@@ -1,13 +1,10 @@
-import os
-import asyncio
-import logging
-import hashlib
-import hmac
-import time
-import random
-from datetime import datetime, timedelta
 
+import os
+import logging
+import asyncio
 from dotenv import load_dotenv
+load_dotenv()  # va chercher .env dans le dossier backend
+
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +18,8 @@ import models
 import schemas
 from models import User
 from database import init_db, async_session as SessionLocal
-from utils.mail import send_verification_email  # Assure-toi qu'elle fonctionne bien
+from utils.mail import send_verification_email
+ # Assure-toi qu'elle fonctionne bien
 
 # === Chargement des variables d'environnement ===
 load_dotenv()

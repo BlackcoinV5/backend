@@ -1,7 +1,15 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey
+from datetime import datetime, timedelta
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum, Index
 from sqlalchemy.orm import relationship
 from database import Base
+import enum
+
+
+# Enum pour le type de transaction
+class TransactionType(enum.Enum):
+    credit = "credit"
+    debit = "debit"
+
 
 # Utilisateur
 class User(Base):
@@ -20,12 +28,16 @@ class User(Base):
     points = Column(Integer, default=0, nullable=False)
     wallet = Column(Integer, default=0, nullable=False)
     referral_code = Column(String(20), unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = Column(DateTime)
 
     # Relations
     transactions = relationship("Transaction", back_populates="user")
     activities = relationship("Activity", back_populates="user")
+
+    def __repr__(self):
+        return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
 
 
 # Transaction liée à un utilisateur
@@ -35,11 +47,15 @@ class Transaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     amount = Column(Float, nullable=False)
-    type = Column(String(10), nullable=False)  # 'credit' ou 'debit'
+    type = Column(Enum(TransactionType), nullable=False)  # 'credit' ou 'debit'
     description = Column(String(255))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="transactions")
+
+    def __repr__(self):
+        return f"<Transaction(id={self.id}, user_id={self.user_id}, type='{self.type.name}', amount={self.amount})>"
 
 
 # Activités réalisées par un utilisateur
@@ -49,9 +65,13 @@ class Activity(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     description = Column(String)
-    date = Column(DateTime, default=datetime.utcnow)
+    date = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="activities")
+
+    def __repr__(self):
+        return f"<Activity(id={self.id}, user_id={self.user_id}, date={self.date})>"
 
 
 # Codes de vérification par email
@@ -61,4 +81,8 @@ class EmailVerificationCode(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(100), index=True)
     code = Column(String(10), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(minutes=10))
+
+    def __repr__(self):
+        return f"<EmailVerificationCode(email='{self.email}', code='{self.code}')>"
