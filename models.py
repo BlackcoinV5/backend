@@ -1,17 +1,23 @@
 from datetime import datetime, timedelta
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum, Index
+from sqlalchemy import (
+    Column, Integer, String, Text, DateTime,
+    Boolean, Float, ForeignKey, Enum
+)
 from sqlalchemy.orm import relationship
+from sqlalchemy.future import select
 from database import Base
 import enum
 
-
+# -------------------------
 # Enum pour le type de transaction
+# -------------------------
 class TransactionType(enum.Enum):
     credit = "credit"
     debit = "debit"
 
-
-# Utilisateur
+# -------------------------
+# Table Utilisateur
+# -------------------------
 class User(Base):
     __tablename__ = "users"
 
@@ -39,15 +45,16 @@ class User(Base):
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
 
-
-# Transaction liée à un utilisateur
+# -------------------------
+# Table Transactions
+# -------------------------
 class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     amount = Column(Float, nullable=False)
-    type = Column(Enum(TransactionType), nullable=False)  # 'credit' ou 'debit'
+    type = Column(Enum(TransactionType), nullable=False)  # credit ou debit
     description = Column(String(255))
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -55,10 +62,14 @@ class Transaction(Base):
     user = relationship("User", back_populates="transactions")
 
     def __repr__(self):
-        return f"<Transaction(id={self.id}, user_id={self.user_id}, type='{self.type.name}', amount={self.amount})>"
+        return (
+            f"<Transaction(id={self.id}, user_id={self.user_id}, "
+            f"type='{self.type.name}', amount={self.amount})>"
+        )
 
-
-# Activités réalisées par un utilisateur
+# -------------------------
+# Table Activités
+# -------------------------
 class Activity(Base):
     __tablename__ = "activities"
 
@@ -73,8 +84,9 @@ class Activity(Base):
     def __repr__(self):
         return f"<Activity(id={self.id}, user_id={self.user_id}, date={self.date})>"
 
-
-# Codes de vérification par email
+# -------------------------
+# Table Codes de vérification Email
+# -------------------------
 class EmailVerificationCode(Base):
     __tablename__ = "email_verification_codes"
 
@@ -86,3 +98,9 @@ class EmailVerificationCode(Base):
 
     def __repr__(self):
         return f"<EmailVerificationCode(email='{self.email}', code='{self.code}')>"
+
+# -------------------------
+# Fonction utilitaire pour rechercher un utilisateur par username Telegram
+# -------------------------
+def select_user_by_telegram_username(username: str):
+    return select(User).where(User.username == username)

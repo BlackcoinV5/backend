@@ -1,232 +1,310 @@
 import os
 import logging
+import logging.config
 import asyncio
 import hashlib
 import hmac
 import time
 import random
 from datetime import datetime, timedelta
+from typing import Annotated, Optional
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Body, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-
-from telegram import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-
+from pydantic import BaseModel, EmailStr, validator, field_validator
+from passlib.context import CryptContext
+from jose import JWTError, jwt
 from dotenv import load_dotenv
-import models
-import schemas
-from models import User
+
+from models import User, EmailVerificationCode, Transaction, Activity
 from database import init_db, async_session as SessionLocal
 from utils.mail import send_verification_email
-from schemas import EmailRequest
 
-# Chargement variables d'environnement
+# Chargement des variables d'environnement
 load_dotenv()
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-FRONTEND_URL = os.getenv("FRONTEND_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+# Configuration des logs
+logging.config.dictConfig({
+    'version': 1,
+    'formatters': {
+        'detailed': {
+            'format': '%(asctime)s %(levelname)s %(module)s %(message)s'
+        }
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'detailed',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': 'blackcoin.log',
+            'maxBytes': 1024 * 1024 * 5,
+            'backupCount': 5,
+            'formatter': 'detailed',
+        }
+    },
+    'root': {
+        'level': 'INFO',
+        'handlers': ['console', 'file']
+    }
+})
 
-if not all([TOKEN, FRONTEND_URL, WEBHOOK_URL]):
-    raise ValueError("⚠️ .env mal configuré. Vérifie TELEGRAM_BOT_TOKEN, FRONTEND_URL et WEBHOOK_URL.")
-
-# Configuration du logger
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialisation FastAPI
+# Configuration de l'application
 app = FastAPI(
     title="BlackCoin API",
     version="1.0",
-    description="Backend pour l'application BlackCoin 🚀",
+    description="API backend pour l'application BlackCoin",
+    openapi_tags=[
+        {
+            "name": "Auth",
+            "description": "Authentification et autorisation"
+        },
+        {
+            "name": "Users",
+            "description": "Gestion des utilisateurs"
+        },
+        {
+            "name": "Transactions",
+            "description": "Opérations financières"
+        },
+        {
+            "name": "Admin",
+            "description": "Fonctionnalités administratives"
+        }
+    ],
+    contact={
+        "name": "Support BlackCoin",
+        "email": "support@blackcoin.com"
+    }
 )
 
-# CORS
+# Middleware CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=["*"],  # À restreindre en production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialisation du bot Telegram
-application = Application.builder().token(TOKEN).build()
+# Configuration de sécurité
+SECRET_KEY = os.getenv("JWT_SECRET")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
-# Dépendance base de données
-async def get_db():
-    async with SessionLocal() as session:
-        yield session
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-# Vérification Authentification Telegram
-def verify_telegram_auth(data: dict) -> bool:
-    data_copy = data.copy()
-    check_hash = data_copy.pop("hash", None)
-    sorted_data = "\n".join([f"{k}={v}" for k, v in sorted(data_copy.items())])
-    secret_key = hashlib.sha256(TOKEN.encode()).digest()
-    expected_hash = hmac.new(secret_key, sorted_data.encode(), hashlib.sha256).hexdigest()
-    auth_time_ok = (int(data_copy.get("auth_date", "0")) + 86400) > int(time.time())
-    return check_hash == expected_hash and auth_time_ok
+# Modèles Pydantic
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
-# Commandes Bot
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🚀 Lancer l'app", web_app=WebAppInfo(url=FRONTEND_URL))]]
-    await update.message.reply_text(
-        "Bienvenue sur BlackCoin 🎉 !\nClique sur le bouton ci-dessous pour ouvrir l'application :",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+class UserBase(BaseModel):
+    username: str
+    email: EmailStr
+    first_name: str
+    last_name: str
+    is_active: bool = True
+
+class UserCreate(UserBase):
+    password: str
+    confirm_password: str
+    phone: str
+    birth_date: str
+    telegram_username: str
+
+    @field_validator('password')
+    def validate_password(cls, v):
+        if len(v) < 8:
+            raise ValueError("Le mot de passe doit contenir au moins 8 caractères")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Le mot de passe doit contenir au moins une majuscule")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Le mot de passe doit contenir au moins un chiffre")
+        return v
+
+    @field_validator('telegram_username')
+    def validate_telegram_username(cls, v):
+        if not re.match(r"^[a-zA-Z0-9_]{5,32}$", v):
+            raise ValueError("Nom d'utilisateur Telegram invalide")
+        return v
+
+    @field_validator('birth_date')
+    def validate_birth_date(cls, v):
+        birth_date = datetime.strptime(v, "%Y-%m-%d").date()
+        if birth_date > datetime.now().date() - timedelta(days=365*13):
+            raise ValueError("Vous devez avoir au moins 13 ans")
+        return v
+
+class UserResponse(UserBase):
+    id: int
+    points: int
+    wallet: int
+
+# Utilitaires
+def verify_password(plain_password: str, hashed_password: str):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    db: AsyncSession = Depends(SessionLocal)
+):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Impossible de valider les identifiants",
+        headers={"WWW-Authenticate": "Bearer"},
     )
-
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    async with SessionLocal() as db:
-        user_id = update.effective_user.id
-        result = await db.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one_or_none()
-
-        if user:
-            await update.message.reply_text(f"💰 Solde: {user.points} pts\n🔹 Wallet: {user.wallet} pts")
-        else:
-            await update.message.reply_text("⚠️ Utilisateur non trouvé.")
-
-async def send_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    async with SessionLocal() as db:
-        user_id = update.effective_user.id
-        args = context.args
-        if len(args) < 2:
-            await update.message.reply_text("Usage: /send_points <ID> <montant>")
-            return
-        
-        try:
-            recipient_id = int(args[0])
-            amount = int(args[1])
-
-            sender_result = await db.execute(select(User).where(User.id == user_id))
-            sender = sender_result.scalar_one_or_none()
-
-            recipient_result = await db.execute(select(User).where(User.id == recipient_id))
-            recipient = recipient_result.scalar_one_or_none()
-
-            if not (sender and recipient):
-                await update.message.reply_text("⚠️ Utilisateur inexistant.")
-                return
-            if sender.points < amount:
-                await update.message.reply_text("⚠️ Solde insuffisant.")
-                return
-
-            sender.points -= amount
-            recipient.points += amount
-
-            db.add(models.Transaction(user_id=sender.id, amount=-amount, type="debit"))
-            db.add(models.Transaction(user_id=recipient.id, amount=amount, type="credit"))
-
-            await db.commit()
-            await update.message.reply_text(f"✅ {amount} pts envoyés à {recipient.username} !")
-
-        except ValueError:
-            await update.message.reply_text("⚠️ Erreur : ID ou montant invalide.")
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Erreur bot : {context.error}")
-    if update.message:
-        await update.message.reply_text("⚠️ Une erreur est survenue. Merci de réessayer plus tard.")
-
-# Ajout des Handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("balance", balance))
-application.add_handler(CommandHandler("send_points", send_points))
-application.add_error_handler(error_handler)
-
-# Webhook Telegram
-async def start_bot():
-    await application.initialize()
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    await application.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"✅ Webhook activé sur {WEBHOOK_URL}")
-    await application.start()
-
-@app.on_event("startup")
-async def on_startup():
-    await init_db()
-    asyncio.create_task(start_bot())
-
-@app.post("/webhook", tags=["Telegram"])
-async def handle_webhook(request: Request):
     try:
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Erreur Webhook : {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
 
-# Authentification Frontend
-@app.post("/auth/telegram", response_model=schemas.UserBase, tags=["Auth"])
-async def auth_telegram(user_data: dict = Body(...), db: AsyncSession = Depends(get_db)):
-    if not verify_telegram_auth(user_data):
-        raise HTTPException(status_code=403, detail="Données Telegram invalides")
-
-    user_id = user_data["id"]
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
-
-    if not user:
-        user = User(
-            id=user_id,
-            first_name=user_data.get("first_name", ""),
-            last_name=user_data.get("last_name", ""),
-            username=user_data.get("username", ""),
-            photo_url=user_data.get("photo_url", "")
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-
+    
+    if user is None:
+        raise credentials_exception
     return user
 
-# Inscription : Envoi du code par email
-@app.post("/register/send-code", status_code=status.HTTP_200_OK, tags=["Auth"])
-async def send_verification_code(payload: EmailRequest, db: AsyncSession = Depends(get_db)):
-    email = payload.email
-    code = str(random.randint(100000, 999999))
+async def get_current_active_user(
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    if not current_user.is_active:
+        raise HTTPException(status_code=400, detail="Utilisateur inactif")
+    return current_user
 
-    result = await db.execute(select(models.EmailVerification).where(models.EmailVerification.email == email))
-    verification = result.scalar_one_or_none()
+# Gestion des erreurs
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "success": False,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
 
-    if verification:
-        verification.code = code
-        verification.expires_at = datetime.utcnow() + timedelta(minutes=10)
-    else:
-        verification = models.EmailVerification(email=email, code=code)
-        db.add(verification)
+# Routes d'authentification
+@app.post("/register", response_model=UserResponse, tags=["Auth"])
+async def register_user(
+    user_data: UserCreate,
+    db: AsyncSession = Depends(SessionLocal)
+):
+    try:
+        # Vérification existence utilisateur
+        existing_user = await db.execute(
+            select(User).where(User.username == user_data.username)
+        )
+        if existing_user.scalar():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nom d'utilisateur déjà utilisé"
+            )
 
-    await db.commit()
-    await send_verification_email(email, code)
-    return {"message": "📧 Code envoyé par email"}
+        # Création utilisateur
+        hashed_password = get_password_hash(user_data.password)
+        new_user = User(
+            **user_data.model_dump(exclude={"confirm_password"}),
+            hashed_password=hashed_password,
+            points=100,  # Bonus de bienvenue
+            wallet=0,
+            created_at=datetime.utcnow()
+        )
 
-@app.post("/register/verify-code", status_code=status.HTTP_200_OK, tags=["Auth"])
-async def verify_code(email: str = Body(...), code: str = Body(...), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(models.EmailVerification).where(models.EmailVerification.email == email))
-    verification = result.scalar_one_or_none()
+        db.add(new_user)
+        await db.commit()
+        await db.refresh(new_user)
 
-    if not verification or verification.code != code:
-        raise HTTPException(status_code=400, detail="❌ Code incorrect")
-    if verification.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="⏰ Code expiré")
+        # Génération token
+        access_token = create_access_token(
+            data={"sub": new_user.username},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
 
-    return {"message": "✅ Code vérifié avec succès"}
+        return {
+            **new_user.__dict__,
+            "access_token": access_token,
+            "token_type": "bearer"
+        }
 
-# Utilisateurs (admin & public)
-@app.get("/user-data", response_model=list[schemas.UserBase], tags=["Users"])
-async def get_users(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User))
-    return result.scalars().all()
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
+@app.post("/token", response_model=Token, tags=["Auth"])
+async def login_for_access_token(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: AsyncSession = Depends(SessionLocal)
+):
+    result = await db.execute(
+        select(User).where(User.username == form_data.username)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Identifiants incorrects"
+        )
+
+    access_token = create_access_token(
+        data={"sub": user.username},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# Routes utilisateur
+@app.get("/users/me", response_model=UserResponse, tags=["Users"])
+async def read_users_me(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+):
+    return current_user
+
+# Routes admin
 @app.get("/admin/users", tags=["Admin"])
-async def get_all_users(db: AsyncSession = Depends(get_db)):
+async def get_all_users(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: AsyncSession = Depends(SessionLocal)
+):
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès non autorisé"
+        )
+
     result = await db.execute(
         select(User).options(
             selectinload(User.transactions),
@@ -235,45 +313,41 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
     )
     users = result.scalars().all()
 
-    return [{
-        "id": u.id,
-        "name": f"{u.first_name} {u.last_name}",
-        "username": u.username,
-        "points": u.points,
-        "is_active": u.is_active,
-        "is_restricted": u.is_restricted,
-        "transactions": [{"amount": t.amount, "type": t.type, "date": t.timestamp} for t in u.transactions],
-        "activities": [{"description": a.description, "date": a.date} for a in u.activities]
-    } for u in users]
+    return [
+        {
+            "id": u.id,
+            "name": f"{u.first_name} {u.last_name}",
+            "username": u.username,
+            "points": u.points,
+            "wallet": u.wallet,
+            "is_active": u.is_active,
+            "transactions": [
+                {
+                    "amount": t.amount,
+                    "type": t.type,
+                    "date": t.timestamp.isoformat()
+                } for t in u.transactions
+            ],
+            "activities": [
+                {
+                    "description": a.description,
+                    "date": a.date.isoformat()
+                } for a in u.activities
+            ]
+        }
+        for u in users
+    ]
 
-@app.put("/admin/users/{user_id}", tags=["Admin"])
-async def update_user(user_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+# Initialisation
+@app.on_event("startup")
+async def on_startup():
+    await init_db()
+    logger.info("Application démarrée")
 
-    if not user:
-        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
-
-    for key, value in payload.items():
-        setattr(user, key, value)
-
-    await db.commit()
-    return {"message": "✅ Utilisateur mis à jour"}
-
-@app.delete("/admin/users/{user_id}", tags=["Admin"])
-async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
-
-    await db.delete(user)
-    await db.commit()
-    return {"message": "🗑️ Utilisateur supprimé"}
-
-# Accueil
-@app.get("/", tags=["Accueil"])
-def root():
-    return {"message": "✅ Backend BlackCoin opérationnel"}
-
+@app.get("/", tags=["Statut"])
+async def health_check():
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "1.0.0"
+    }
