@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import time
 import random
+import httpx  # Ajoute cette importation si elle n'est pas encore faite
 from datetime import datetime, timedelta
 from typing import Annotated, Optional
 
@@ -24,6 +25,37 @@ from dotenv import load_dotenv
 from models import User, EmailVerificationCode, Transaction, Activity
 from database import init_db, async_session as SessionLocal
 from utils.mail import send_verification_email
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+@app.post("/webhook", tags=["Telegram"])
+async def telegram_webhook(request: Request):
+    update = await request.json()
+    logger.info(f"Received update: {update}")
+
+    if "message" in update:
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"].get("text", "")
+
+        if text == "/start":
+            await send_telegram_message(chat_id, "👋 Bienvenue sur BlackCoin !")
+        else:
+            await send_telegram_message(chat_id, f"🚀 Tu as envoyé: {text}")
+
+    return {"ok": True}
+
+async def send_telegram_message(chat_id, text):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{TELEGRAM_API_URL}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "Markdown"
+            }
+        )
+
 
 # Chargement des variables d'environnement
 load_dotenv()
