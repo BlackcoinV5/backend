@@ -47,6 +47,10 @@ class UserResponse(UserBase):
     last_login: Optional[datetime]
 
 
+class EmailRequest(BaseModel):
+    email: str
+
+
 # === Schémas Transactions ===
 
 class TransactionBase(BaseModel):
