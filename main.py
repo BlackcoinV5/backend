@@ -1,13 +1,9 @@
 import os
+import re
 import logging
 import logging.config
-import asyncio
-import hashlib
-import hmac
-import time
-import random
-import httpx  # Ajoute cette importation si elle n'est pas encore faite
-from datetime import datetime, timedelta
+import httpx
+from datetime import datetime, timedelta, date
 from typing import Annotated, Optional
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Body, status
@@ -25,37 +21,6 @@ from dotenv import load_dotenv
 from models import User, EmailVerificationCode, Transaction, Activity
 from database import init_db, async_session as SessionLocal
 from utils.mail import send_verification_email
-
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-@app.post("/webhook", tags=["Telegram"])
-async def telegram_webhook(request: Request):
-    update = await request.json()
-    logger.info(f"Received update: {update}")
-
-    if "message" in update:
-        chat_id = update["message"]["chat"]["id"]
-        text = update["message"].get("text", "")
-
-        if text == "/start":
-            await send_telegram_message(chat_id, "👋 Bienvenue sur BlackCoin !")
-        else:
-            await send_telegram_message(chat_id, f"🚀 Tu as envoyé: {text}")
-
-    return {"ok": True}
-
-async def send_telegram_message(chat_id, text):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{TELEGRAM_API_URL}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown"
-            }
-        )
-
 
 # Chargement des variables d'environnement
 load_dotenv()
@@ -110,6 +75,10 @@ app = FastAPI(
         {
             "name": "Admin",
             "description": "Fonctionnalités administratives"
+        },
+        {
+            "name": "Telegram",
+            "description": "Intégration Telegram"
         }
     ],
     contact={
@@ -135,6 +104,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# Télégram configuration
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
 # Modèles Pydantic
 class Token(BaseModel):
     access_token: str
@@ -148,14 +121,14 @@ class UserBase(BaseModel):
     email: EmailStr
     first_name: str
     last_name: str
+    phone: str
+    birth_date: date
+    telegram_username: str
     is_active: bool = True
 
 class UserCreate(UserBase):
     password: str
     confirm_password: str
-    phone: str
-    birth_date: str
-    telegram_username: str
 
     @field_validator('password')
     def validate_password(cls, v):
@@ -169,15 +142,26 @@ class UserCreate(UserBase):
 
     @field_validator('telegram_username')
     def validate_telegram_username(cls, v):
-        if not re.match(r"^[a-zA-Z0-9_]{5,32}$", v):
-            raise ValueError("Nom d'utilisateur Telegram invalide")
+        if not re.match(r"^@[a-zA-Z0-9_]{5,32}$", v):
+            raise ValueError("Nom d'utilisateur Telegram invalide. Doit commencer par @ et contenir 5-32 caractères alphanumériques et underscores.")
         return v
 
     @field_validator('birth_date')
     def validate_birth_date(cls, v):
-        birth_date = datetime.strptime(v, "%Y-%m-%d").date()
-        if birth_date > datetime.now().date() - timedelta(days=365*13):
+        if isinstance(v, str):
+            try:
+                v = datetime.strptime(v, "%Y-%m-%d").date()
+            except ValueError:
+                raise ValueError("Format de date invalide. Utilisez YYYY-MM-DD.")
+        
+        if v > datetime.now().date() - timedelta(days=365*13):
             raise ValueError("Vous devez avoir au moins 13 ans")
+        return v
+
+    @field_validator('phone')
+    def validate_phone(cls, v):
+        if not re.match(r"^\+?[1-9]\d{1,14}$", v):
+            raise ValueError("Numéro de téléphone invalide. Utilisez le format international.")
         return v
 
 class UserResponse(UserBase):
@@ -185,7 +169,15 @@ class UserResponse(UserBase):
     points: int
     wallet: int
 
+class UserRegisterResponse(UserResponse):
+    access_token: str
+    token_type: str
+
 # Utilitaires
+async def get_db():
+    async with SessionLocal() as session:
+        yield session
+
 def verify_password(plain_password: str, hashed_password: str):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -204,7 +196,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
-    db: AsyncSession = Depends(SessionLocal)
+    db: AsyncSession = Depends(get_db)
 ):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -233,26 +225,40 @@ async def get_current_active_user(
         raise HTTPException(status_code=400, detail="Utilisateur inactif")
     return current_user
 
-# Gestion des erreurs
-@app.exception_handler(HTTPException)
-async def custom_http_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "success": False,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
+# Routes
+@app.post("/webhook", tags=["Telegram"])
+async def telegram_webhook(request: Request):
+    update = await request.json()
+    logger.info(f"Received update: {update}")
 
-# Routes d'authentification
-@app.post("/register", response_model=UserResponse, tags=["Auth"])
+    if "message" in update:
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"].get("text", "")
+
+        if text == "/start":
+            await send_telegram_message(chat_id, "👋 Bienvenue sur BlackCoin !")
+        else:
+            await send_telegram_message(chat_id, f"🚀 Tu as envoyé: {text}")
+
+    return {"ok": True}
+
+async def send_telegram_message(chat_id, text):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{TELEGRAM_API_URL}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "Markdown"
+            }
+        )
+
+@app.post("/register", response_model=UserRegisterResponse, tags=["Auth"])
 async def register_user(
     user_data: UserCreate,
-    db: AsyncSession = Depends(SessionLocal)
+    db: AsyncSession = Depends(get_db)
 ):
     try:
-        # Vérification existence utilisateur
         existing_user = await db.execute(
             select(User).where(User.username == user_data.username)
         )
@@ -262,12 +268,11 @@ async def register_user(
                 detail="Nom d'utilisateur déjà utilisé"
             )
 
-        # Création utilisateur
         hashed_password = get_password_hash(user_data.password)
         new_user = User(
-            **user_data.model_dump(exclude={"confirm_password"}),
+            **user_data.model_dump(exclude={"confirm_password", "password"}),
             hashed_password=hashed_password,
-            points=100,  # Bonus de bienvenue
+            points=100,
             wallet=0,
             created_at=datetime.utcnow()
         )
@@ -276,7 +281,6 @@ async def register_user(
         await db.commit()
         await db.refresh(new_user)
 
-        # Génération token
         access_token = create_access_token(
             data={"sub": new_user.username},
             expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -298,7 +302,7 @@ async def register_user(
 @app.post("/token", response_model=Token, tags=["Auth"])
 async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    db: AsyncSession = Depends(SessionLocal)
+    db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
         select(User).where(User.username == form_data.username)
@@ -318,18 +322,16 @@ async def login_for_access_token(
 
     return {"access_token": access_token, "token_type": "bearer"}
 
-# Routes utilisateur
 @app.get("/users/me", response_model=UserResponse, tags=["Users"])
 async def read_users_me(
     current_user: Annotated[User, Depends(get_current_active_user)]
 ):
     return current_user
 
-# Routes admin
 @app.get("/admin/users", tags=["Admin"])
 async def get_all_users(
     current_user: Annotated[User, Depends(get_current_active_user)],
-    db: AsyncSession = Depends(SessionLocal)
+    db: AsyncSession = Depends(get_db)
 ):
     if not current_user.is_admin:
         raise HTTPException(
