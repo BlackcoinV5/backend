@@ -1,22 +1,24 @@
 from datetime import datetime, timedelta
+from enum import Enum
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime,
-    Boolean, Float, ForeignKey, Enum
+    Boolean, Float, ForeignKey, Enum as SqlEnum
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.future import select
 from database import Base
-import enum
+
 
 # -------------------------
 # Enum pour le type de transaction
 # -------------------------
-class TransactionType(enum.Enum):
-    credit = "credit"
-    debit = "debit"
+class TransactionType(Enum):
+    CREDIT = "credit"
+    DEBIT = "debit"
+
 
 # -------------------------
-# Table Utilisateur
+# Table Utilisateurs
 # -------------------------
 class User(Base):
     __tablename__ = "users"
@@ -25,7 +27,7 @@ class User(Base):
     telegram_username = Column(String(50), unique=True, index=True)
     first_name = Column(String(50))
     last_name = Column(String(50))
-    username = Column(String(50), unique=True, index=True)
+    username = Column(String(50), unique=True, index=True)  # utilisé pour l'auth
     email = Column(String(100), unique=True, index=True)
     is_verified = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
@@ -39,11 +41,12 @@ class User(Base):
     last_login = Column(DateTime)
 
     # Relations
-    transactions = relationship("Transaction", back_populates="user")
-    activities = relationship("Activity", back_populates="user")
+    transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")
+    activities = relationship("Activity", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
+
 
 # -------------------------
 # Table Transactions
@@ -54,7 +57,7 @@ class Transaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     amount = Column(Float, nullable=False)
-    type = Column(Enum(TransactionType), nullable=False)  # credit ou debit
+    type = Column(SqlEnum(TransactionType), nullable=False)  # credit ou debit
     description = Column(String(255))
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -62,10 +65,8 @@ class Transaction(Base):
     user = relationship("User", back_populates="transactions")
 
     def __repr__(self):
-        return (
-            f"<Transaction(id={self.id}, user_id={self.user_id}, "
-            f"type='{self.type.name}', amount={self.amount})>"
-        )
+        return f"<Transaction(id={self.id}, user_id={self.user_id}, type='{self.type.name}', amount={self.amount})>"
+
 
 # -------------------------
 # Table Activités
@@ -84,6 +85,7 @@ class Activity(Base):
     def __repr__(self):
         return f"<Activity(id={self.id}, user_id={self.user_id}, date={self.date})>"
 
+
 # -------------------------
 # Table Codes de vérification Email
 # -------------------------
@@ -99,8 +101,9 @@ class EmailVerificationCode(Base):
     def __repr__(self):
         return f"<EmailVerificationCode(email='{self.email}', code='{self.code}')>"
 
+
 # -------------------------
-# Fonction utilitaire pour rechercher un utilisateur par username Telegram
+# Fonction utilitaire : requête par username Telegram
 # -------------------------
 def select_user_by_telegram_username(username: str):
-    return select(User).where(User.username == username)
+    return select(User).where(User.telegram_username == username)

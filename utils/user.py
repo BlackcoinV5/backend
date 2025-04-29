@@ -1,8 +1,3 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
-from sqlalchemy.orm import relationship
-from backend.database import Base
-
 class User(Base):
     __tablename__ = "users"
 
@@ -12,6 +7,12 @@ class User(Base):
     last_name = Column(String(50))
     username = Column(String(50), unique=True, index=True)
     email = Column(String(100), unique=True, index=True)
+    phone_number = Column(String(20), unique=True)
+    birth_date = Column(String(10))  # ou Column(Date) si mieux typé
+    country = Column(String(100))
+    country_code = Column(String(10))
+    hashed_password = Column(String(255))
+
     is_verified = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     is_restricted = Column(Boolean, default=False)
@@ -19,6 +20,7 @@ class User(Base):
     points = Column(Integer, default=0, nullable=False)
     wallet = Column(Integer, default=0, nullable=False)
     referral_code = Column(String(20), unique=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = Column(DateTime)
