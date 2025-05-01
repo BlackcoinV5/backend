@@ -1,67 +1,28 @@
-from pydantic import BaseModel, Field, ConfigDict
-from datetime import datetime
+# backend/schemas.py
+from pydantic import BaseModel, EmailStr, Field
+from datetime import date
 from typing import Optional
-
-
-# === Schémas Utilisateur ===
-
-class UserBase(BaseModel):
-    id: int = Field(..., examples=[123456789])
-    first_name: Optional[str] = Field(None, max_length=50)
-    last_name: Optional[str] = Field(None, max_length=50)
-    username: Optional[str] = Field(None, max_length=50)
-    photo_url: Optional[str] = Field(None, max_length=255)
-    points: int = Field(0, ge=0)
-    wallet: int = Field(0, ge=0)
-    referral_code: Optional[str] = Field(None, max_length=20)
-
-    model_config = ConfigDict(from_attributes=True)
-
+import uuid
 
 class UserCreate(BaseModel):
-    id: int = Field(..., examples=[123456789])
-    first_name: Optional[str] = Field(None, max_length=50)
-    last_name: Optional[str] = Field(None, max_length=50)
-    username: Optional[str] = Field(None, max_length=50)
-    photo_url: Optional[str] = Field(None, max_length=255)
-    referral_code: Optional[str] = Field(None, max_length=20)
+    first_name: str
+    last_name: str
+    birth_date: date
+    phone_code: str
+    phone_number: str
+    telegram_username: Optional[str] = None
+    email: EmailStr
+    country: str
+    country_code: str
+    password: str
 
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UserUpdate(BaseModel):
-    first_name: Optional[str] = Field(None, max_length=50)
-    last_name: Optional[str] = Field(None, max_length=50)
-    username: Optional[str] = Field(None, max_length=50)
-    photo_url: Optional[str] = Field(None, max_length=255)
-    email: Optional[str] = Field(None, max_length=255)
-    phone_number: Optional[str] = Field(None, max_length=20)
-    birth_date: Optional[str] = Field(None, max_length=10)  # format YYYY-MM-DD
-    password: Optional[str] = Field(None, min_length=6)
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UserResponse(UserBase):
-    created_at: datetime
-    last_login: Optional[datetime]
-
-
-class EmailRequest(BaseModel):
+class UserResponse(BaseModel):
+    id: uuid.UUID
+    first_name: str
+    last_name: str
+    telegram_username: Optional[str]
     email: str
+    is_verified: bool
 
-
-# === Schémas Transactions ===
-
-class TransactionBase(BaseModel):
-    user_id: int
-    amount: int = Field(..., gt=0)
-    type: str = Field(..., pattern="^(credit|debit)$")
-    description: Optional[str] = Field(None, max_length=255)
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class TransactionResponse(TransactionBase):
-    id: int
-    created_at: datetime
+    class Config:
+        orm_mode = True
