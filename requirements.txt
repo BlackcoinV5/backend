@@ -4,4 +4,3 @@ sqlalchemy
 asyncpg
 python-dotenv
 passlib[bcrypt]
-psycopg2-binary
