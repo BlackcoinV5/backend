@@ -1,10 +1,11 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
+from datetime import date
 
 class UserCreate(BaseModel):
     first_name: str = Field(..., min_length=1)
     last_name: str = Field(..., min_length=1)
-    birthdate: str  # Tu peux le typer en `date` si tu veux valider le format ISO
+    birthdate: date  # Utilisation de `date` pour valider le format ISO (YYYY-MM-DD)
     phone: str = Field(..., min_length=5)
     telegram_username: str = Field(..., min_length=3)
     email: EmailStr
