@@ -1,17 +1,18 @@
 from fastapi import FastAPI
-from backend.routes import auth, email
 from fastapi.middleware.cors import CORSMiddleware
+from backend.routes import auth, email, telegram  # ✅ Import groupé propre
 
 app = FastAPI()
 
-# Inclusion unique des routes avec préfixes
+# Inclusion des routes avec ou sans préfixe
 app.include_router(auth.router, prefix="/auth")
 app.include_router(email.router, prefix="/email")
+app.include_router(telegram.router)  # ✅ webhook reste accessible via /webhook
 
-# CORS : autoriser le frontend depuis Vercel et localhost
+# Configuration CORS : autoriser frontend local + production
 origins = [
-    "http://localhost:5173",  # développement local
-    "https://blackcoin-v5-frontend.vercel.app"  # production
+    "http://localhost:5173",  # Développement local
+    "https://blackcoin-v5-frontend.vercel.app"  # Frontend Vercel
 ]
 
 app.add_middleware(
